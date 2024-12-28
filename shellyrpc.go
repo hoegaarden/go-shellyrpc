@@ -139,7 +139,8 @@ type RequestFrame struct {
 type ResponseFrame struct {
 	ID          uint64 `json:"id"`
 	Destination string `json:"dst"`
-	Result      Result `json:"result"`
+	Result      Result `json:"result,omitempty"`
+	Error       Result `json:"error,omitempty"`
 }
 
 // Roundtrip sends the given request frame to the device and reads the response frame.
@@ -183,6 +184,33 @@ func (r *Client) Roundtrip(req RequestFrame) (ResponseFrame, error) {
 	return res, nil
 }
 
+// RPCError is an error returned by the RPC method, thus not a transoport,
+// encoding or other error, but an application error, returned by the remote
+// device.
+type RPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e RPCError) Error() string {
+	return fmt.Sprintf(`RPC Error: code: %d, message: "%s"`, e.Code, e.Message)
+}
+
+func asRPCError(obj Result) (RPCError, bool) {
+	if obj == nil {
+		return RPCError{}, false
+	}
+
+	code, hasCode := obj["code"].(float64)
+	message, hasMessage := obj["message"].(string)
+
+	if hasCode && hasMessage {
+		return RPCError{Code: int(code), Message: message}, true
+	}
+
+	return RPCError{}, false
+}
+
 // Call calls the given method with the given parameters and returns the result or an error.
 // It builds the request frame, sends it to the device, and reads the response
 // frame, it also checks for the correct ID and source to ensure the response
@@ -208,6 +236,17 @@ func (r *Client) Call(method string, params Params) (Result, error) {
 	}
 	if e, a := SourceName, res.Destination; e != a {
 		return nil, fmt.Errorf("wrong response destination, expected: %s, got: %s", e, a)
+	}
+
+	// If there is e.g. no handler for the method, this error is returned as
+	// res.Error. If there is some issue with the params, the error is returned
+	// as res.Result.
+	// Thus we check both and return any such application error as an RPCError.
+	if rpcErr, ok := asRPCError(res.Error); ok {
+		return nil, rpcErr
+	}
+	if rpcErr, ok := asRPCError(res.Result); ok {
+		return nil, rpcErr
 	}
 
 	return res.Result, nil
