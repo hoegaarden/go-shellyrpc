@@ -24,16 +24,21 @@ func main() {
 
 	flag.Parse()
 
+	os.Exit(run(addr, method, params))
+}
+
+func run(addr, method, params string) (rc int) {
 	rpcClient := &shellyrpc.Client{Address: addr}
 
 	err := rpcClient.Setup()
 	if err != nil {
 		log.Printf("Failed to setup RPC client: %v", err)
-		return
+		return 10
 	}
 	defer func() {
 		if err := rpcClient.Teardown(); err != nil {
-			log.Fatalf("Failed to teardown RPC client: %v", err)
+			log.Printf("Failed to teardown RPC client: %v", err)
+			rc = 90
 		}
 	}()
 
@@ -41,13 +46,19 @@ func main() {
 	err = json.Unmarshal([]byte(params), &reqParams)
 	if err != nil {
 		log.Printf("Failed to unmarshal params: %v", err)
-		return
+		return 20
 	}
 
 	res, err := rpcClient.Call(method, reqParams)
 	if err != nil {
-		log.Printf("Failed to call %s with %q: %v", method, reqParams, err)
-		return
+		switch e := err.(type) {
+		case shellyrpc.RPCError:
+			res = shellyrpc.Result{"RPCError": e}
+			rc = 30
+		default:
+			log.Printf(`Failed to call "%s" with "%v": %v`, method, reqParams, e)
+			return 40
+		}
 	}
 
 	enc := json.NewEncoder(os.Stdout)
@@ -55,6 +66,8 @@ func main() {
 	err = enc.Encode(res)
 	if err != nil {
 		log.Printf("Failed to encode response: %v", err)
-		return
+		return 50
 	}
+
+	return rc
 }
